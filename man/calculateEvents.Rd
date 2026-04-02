@@ -2,7 +2,7 @@
 % Please edit documentation in R/calculateEvents.R
 \name{calculateEvents}
 \alias{calculateEvents}
-\title{Calculate UPD events in trio VCFs.}
+\title{Detect UPD events in trio VCFs using a HMM}
 \usage{
 calculateEvents(
   largeCollapsedVcf,
@@ -14,20 +14,26 @@ calculateEvents(
 )
 }
 \arguments{
-\item{largeCollapsedVcf}{The VCF file in the general format
-(largeCollapsedVcf) with VariantAnnotation package. Previously edited with
-\code{vcfCheck()} function from UPDhmm package.}
+\item{largeCollapsedVcf}{A VCF previously processed
+with \code{vcfCheck()} function from UPDhmm package.}
 
 \item{hmm}{Default = \code{NULL}. If no arguments are added, the package
 will use the default HMM already implemented, based on Mendelian
 inheritance.}
 
-\item{field_DP}{Default = \code{NULL}. Character string specifying which FORMAT field in the VCF
-contains the read depth information to use in \code{addRatioDepth()}.
-If \code{NULL} (default), the function will automatically try \code{"DP"} (standard depth)
-or \code{"AD"} (allelic depths, summed across alleles).
+\item{field_DP}{Default = NULL. Character string specifying which FORMAT field in the VCF
+contains the read depth information.
+
+If NULL (default), the function will automatically try \emph{DP} (standard depth)
+or \emph{AD} (allelic depths, summed across alleles).
 Use this parameter if your VCF uses a non-standard field name for depth,
-e.g. \code{field = "NR"} or \code{"field_DP"}.}
+e.g. \emph{field = "NR"} or \emph{field_DP}.}
+
+\item{add_ratios}{Logical; default = FALSE.
+
+If TRUE, per-sample read depth sums and counts of valid calls are computed;
+these values are then used to calculate the genome-wide mean per individual,
+which is used to normalize the per-block depth ratios.}
 
 \item{add_ratios}{Logical; default = FALSE.
 
@@ -36,15 +42,17 @@ used to calculate normalized per-block depth ratios.}
 
 \item{BPPARAM}{Parallelization settings, passed to
 \link[BiocParallel]{bplapply}.
-By default \code{BiocParallel::SerialParam()} (serial execution).
+By default \emph{BiocParallel::SerialParam()} (serial execution).
 To enable parallelization, provide a BiocParallel backend, e.g.
-\code{BiocParallel::MulticoreParam(workers = min(2, parallel::detectCores()))}
-or \code{BiocParallel::SnowParam(workers = 2)}.
+\emph{BiocParallel::MulticoreParam(workers = min(2, parallel::detectCores()))}
+or \emph{BiocParallel::SnowParam(workers = 2)}.
+
 Note: when running under R CMD check or Bioconductor build systems,
 the number of workers may be automatically limited (usually less or equal to 2).}
 
-\item{verbose}{Logical, default = \code{FALSE}.
-If \code{TRUE}, progress messages will be printed during processing.}
+\item{verbose}{Logical, default = FALSE.
+
+If TRUE, progress messages will be printed during processing.}
 }
 \value{
 A \code{data.frame} object containing all detected events in the provided trio.
@@ -61,10 +69,30 @@ Columns include:
 If no events are found, the function will return an empty \code{data.frame}.
 }
 \description{
-This function predicts the hidden states by applying the Viterbi algorithm
-using the Hidden Markov Model (HMM) from the UPDhmm package. It takes the
-genotypes of the trio as input and includes a final step to simplify the
-results into blocks.
+This function detects regions of uniparental disomy (UPD) in trio genotypes
+by applying a Hidden Markov Model (HMM). It runs the Viterbi algorithm
+chromosome by chromosome, optionally computes per-sample read depth ratios,
+identifies consecutive variants sharing the same inferred state, and summarizes
+them into blocks. Blocks are then filtered to retain only those with more than
+one SNP, non-normal HMM states, and located on autosomes. The resulting table
+includes genomic coordinates, HMM state, number of SNPs, number of Mendelian
+errors, and optionally per-block depth-ratio metrics for downstream analysis.
+}
+\details{
+The function performs the following major steps:
+
+\emph{1. Optional per-sample read depth totals}
+
+If add_ratios = TRUE, the function computes the total read depth and the number of valid calls per individual across the entire VCF, using the field specified in field_DP or, if unavailable, DP or AD. These totals are later used to normalize per-block depth ratios.
+
+\emph{2. Chromosomal splitting and per-chromosome HMM processing}
+
+The VCF is split by chromosome and \code{processChromosome()} is applied to each, which runs the Viterbi algorithm to infer hidden states and groups consecutive variants with the same state into blocks, generating summary metrics for each.
+This step can be executed in series or in parallel depending on the BPPARAM parameter.
+
+\emph{3. Consolidation and filtering of detected UPD events}
+
+All blocks from all chromosomes are combined into a single data.frame and filtered to retain only those with more than one SNP, a state different from normal, and located on autosomes. The final output summarizes detected UPD events, including genomic coordinates, HMM state, number of SNPs, number of Mendelian errors per block, and, if calculated, per-block depth ratios.
 }
 \details{
 \subsection{Custom HMM structure. The user can implement its own HMM.}{
@@ -83,10 +111,12 @@ A custom HMM must be a list following the structure of the HMM package, containi
 \examples{
 file <- system.file(package = "UPDhmm", "extdata", "test_het_mat.vcf.gz")
 vcf <- VariantAnnotation::readVcf(file)
-processedVcf <- vcfCheck(vcf,
-    proband = "NA19675", 
-    mother = "NA19678",
-    father = "NA19679"
+
+processedVcf <- vcfCheck(
+    vcf,
+    proband = "NA19675",
+    mother  = "NA19678",
+    father  = "NA19679"
 )
 
 # Run in serial mode (default)
@@ -96,4 +126,5 @@ res <- calculateEvents(processedVcf)
 library(BiocParallel)
 param <- MulticoreParam(workers = 2)
 res_parallel <- calculateEvents(processedVcf, BPPARAM = param)
+
 }

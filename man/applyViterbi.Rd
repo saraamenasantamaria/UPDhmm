@@ -2,12 +2,12 @@
 % Please edit documentation in R/applyViterbi.R
 \name{applyViterbi}
 \alias{applyViterbi}
-\title{Apply the hidden Markov model using the Viterbi algorithm.}
+\title{Apply the Hidden Markov Model using the Viterbi algorithm}
 \usage{
 applyViterbi(largeCollapsedVcf, hmm)
 }
 \arguments{
-\item{largeCollapsedVcf}{input vcf file}
+\item{largeCollapsedVcf}{A CollapsedVCF object.}
 
 \item{hmm}{Hidden Markov Model used to infer the events}
 }
@@ -16,6 +16,13 @@ the input largeCollapsedVcf object updated with a new metadata column \emph{stat
 which contains the inferred hidden state for each variant.
 }
 \description{
-Apply the hidden Markov model using the Viterbi algorithm.
+This function takes a VCF object and a pre-defined Hidden Markov Model (HMM),
+applies the Viterbi algorithm to infer the most likely sequence of hidden states
+for each variant, and stores the resulting state sequence inside the VCF metadata.
+}
+\details{
+It expects that the metadata column \emph{geno_coded} exists, containing a numeric
+encoding of the genotypes. This column is automatically generated when the VCF
+is processed with \code{vcfCheck()} from the UPDhmm package.
 }
 \keyword{internal}

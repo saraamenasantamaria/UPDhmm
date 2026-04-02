@@ -1,13 +1,12 @@
-#' Calculate UPD events in trio VCFs.
+#' Detect UPD events in trio VCFs using a HMM
 #'
 #' This function predicts the hidden states by applying the Viterbi algorithm
 #' using the Hidden Markov Model (HMM) from the UPDhmm package. It takes the
 #' genotypes of the trio as input and includes a final step to simplify the
 #' results into blocks.
 #'
-#' @param largeCollapsedVcf The VCF file in the general format 
-#' (largeCollapsedVcf) with VariantAnnotation package. Previously edited with 
-#' `vcfCheck()` function from UPDhmm package.
+#' @param largeCollapsedVcf A VCF previously processed 
+#'   with \code{vcfCheck()} function from UPDhmm package.
 #'
 #' @param hmm Default = `NULL`. If no arguments are added, the package 
 #' will use the default HMM already implemented, based on Mendelian 
@@ -27,15 +26,17 @@
 #'
 #' @param BPPARAM Parallelization settings, passed to
 #'   \link[BiocParallel]{bplapply}.
-#'   By default `BiocParallel::SerialParam()` (serial execution).
+#'   By default *BiocParallel::SerialParam()* (serial execution).
 #'   To enable parallelization, provide a BiocParallel backend, e.g.
-#'   `BiocParallel::MulticoreParam(workers = min(2, parallel::detectCores()))`
-#'   or `BiocParallel::SnowParam(workers = 2)`.
+#'   *BiocParallel::MulticoreParam(workers = min(2, parallel::detectCores()))*
+#'   or *BiocParallel::SnowParam(workers = 2)*.
+#'   
 #'   Note: when running under R CMD check or Bioconductor build systems,
 #'   the number of workers may be automatically limited (usually less or equal to 2).
 #'
-#' @param verbose Logical, default = `FALSE`. 
-#'   If `TRUE`, progress messages will be printed during processing.
+#' @param verbose Logical, default = FALSE. 
+#' 
+#'   If TRUE, progress messages will be printed during processing.
 #'
 #' @details
 #' ### Custom HMM structure. The user can implement its own HMM.
@@ -63,15 +64,43 @@
 #'
 #' If no events are found, the function will return an empty `data.frame`.
 #'
-#' @export
+#' The function performs the following major steps:
+#'
+#' *1. Optional per-sample read depth totals*
+#' 
+#' If add_ratios = TRUE, the function computes the total read depth and the number of valid calls per individual across the entire VCF, using the field specified in field_DP or, if unavailable, DP or AD. These totals are later used to normalize per-block depth ratios.
+#' 
+#' *2. Chromosomal splitting and per-chromosome HMM processing*
+#' 
+#' The VCF is split by chromosome and \code{processChromosome()} is applied to each, which runs the Viterbi algorithm to infer hidden states and groups consecutive variants with the same state into blocks, generating summary metrics for each.  
+#' This step can be executed in series or in parallel depending on the BPPARAM parameter.
+#' 
+#' *3. Consolidation and filtering of detected UPD events*
+#' 
+#' All blocks from all chromosomes are combined into a single data.frame and filtered to retain only those with more than one SNP, a state different from normal, and located on autosomes. The final output summarizes detected UPD events, including genomic coordinates, HMM state, number of SNPs, number of Mendelian errors per block, and, if calculated, per-block depth ratios.
+#' 
+#' @return A data.frame summarizing all detected UPD-like events.  
+#' Columns include:
+#' \itemize{
+#'   \item seqnames – chromosome name  
+#'   \item start, end – genomic coordinates  
+#'   \item group – inferred HMM state  
+#'   \item n_snps – number of SNPs in the block  
+#'   \item n_mendelian_error – number of Mendelian errors in the block  
+#'   \item depth-ratio metrics (if add_ratios = TRUE)  
+#' }
+#'
+#' If no events are detected, returns an empty data.frame.
 #'
 #' @examples
 #' file <- system.file(package = "UPDhmm", "extdata", "test_het_mat.vcf.gz")
 #' vcf <- VariantAnnotation::readVcf(file)
-#' processedVcf <- vcfCheck(vcf,
-#'     proband = "NA19675", 
-#'     mother = "NA19678",
-#'     father = "NA19679"
+#'
+#' processedVcf <- vcfCheck(
+#'     vcf,
+#'     proband = "NA19675",
+#'     mother  = "NA19678",
+#'     father  = "NA19679"
 #' )
 #'
 #' # Run in serial mode (default)
@@ -81,6 +110,9 @@
 #' library(BiocParallel)
 #' param <- MulticoreParam(workers = 2)
 #' res_parallel <- calculateEvents(processedVcf, BPPARAM = param)
+#'
+#' @export
+#' 
 calculateEvents <- function(largeCollapsedVcf,
                             hmm = NULL,
                             field_DP = NULL,

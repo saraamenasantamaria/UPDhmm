@@ -1,4 +1,4 @@
-#' Apply the hidden Markov model using the Viterbi algorithm.
+#' Apply the Hidden Markov Model using the Viterbi algorithm
 #'
 #'
 #' @param largeCollapsedVcf input vcf file

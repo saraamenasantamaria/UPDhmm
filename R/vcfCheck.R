@@ -27,6 +27,23 @@
 #' processedVcf <-
 #'    vcfCheck(vcf, proband = "NA19675", mother = "NA19678", father = "NA19679")
 #'
+#' @return A *largeCollapsedVcf* object identical to the input with samples renamed 
+#' to standard names for the trio and a new metadata column *geno_coded* containing 
+#' the numeric encoding of the trio genotypes for each variant.
+#' 
+#' @examples
+#' file <- system.file(package = "UPDhmm", "extdata", "test_het_mat.vcf.gz")
+#' vcf  <- VariantAnnotation::readVcf(file)
+#'
+#' processedVcf <- vcfCheck(
+#'     vcf,
+#'     proband = "NA19675",
+#'     mother  = "NA19678",
+#'     father  = "NA19679"
+#' )
+#'
+#' @export
+#' 
 vcfCheck <- function(
     largeCollapsedVcf,
     father,

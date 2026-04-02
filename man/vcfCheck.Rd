@@ -7,13 +7,13 @@
 vcfCheck(largeCollapsedVcf, father, mother, proband, check_quality = FALSE)
 }
 \arguments{
-\item{largeCollapsedVcf}{The file in largeCollapsedVcf format.}
+\item{largeCollapsedVcf}{A VCF object of class \emph{CollapsedVCF}.}
 
-\item{father}{Name of the father's sample.}
+\item{father}{Character string with the sample ID corresponding to the father.}
 
-\item{mother}{Name of the mother's sample.}
+\item{mother}{Character string with the sample ID corresponding to the mother.}
 
-\item{proband}{Name of the proband's sample.}
+\item{proband}{Character string with the sample ID corresponding to the proband.}
 
 \item{check_quality}{Optional argument. TRUE/FALSE. If quality parameters
 want to be measured.

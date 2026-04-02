@@ -14,9 +14,9 @@ processChromosome(
 )
 }
 \arguments{
-\item{vcf_chr}{CollapsedVCF object for one chromosome}
+\item{vcf_chr}{A CollapsedVCF object representing a single chromosome.}
 
-\item{hmm}{Hidden Markov Model object}
+\item{hmm}{A Hidden Markov Model object.}
 
 \item{add_ratios}{Logical; default = FALSE.}
 
