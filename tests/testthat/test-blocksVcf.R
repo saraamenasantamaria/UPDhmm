@@ -1,83 +1,159 @@
 # test-blocksVcf.R
 
-# Expected UPD event blocks 
+# Expected output block 
 expected_df <- data.frame(
-  ID = "NA19675",
-  seqnames = "6",
+  ID = "NA19685",
+  chromosome = "6",
   start = 32489853,
-  end = 32489876,
-  group = as.character("iso_mat"),
-  n_snps = 3L,
-  geno_coded = I(setNames(list(c("133","133","121")), "1")),
-  total_sum_quality_proband = 185,
-  total_sum_quality_mother = 178,
-  total_sum_quality_father = 184,
-  total_count_quality_proband = 3,
-  total_count_quality_mother = 3,
-  total_count_quality_father = 3
+  end=  33499925,
+  group = "iso_mat",
+  n_snps = 5L,
+  geno_coded = I(setNames(list(c("133", "133", "121", "122", "133")), "1")),
+  ratio_father = 0.984479,
+  ratio_mother = 0.968397,
+  ratio_proband = 0.978982
 )
 
-input <- data.frame(
-  ID = c("NA19675","NA19675","NA19675"),
-  start = c(32489853, 32489856, 32489876),
-  end = c(32489853, 32489856, 32489876),
-  group = c("iso_mat", "iso_mat", "iso_mat"),
-  seqnames = c("6", "6", "6"),
-  geno_coded = c("133", "133", "121"),
-  quality_proband = c(60, 60, 65),
-  quality_mother = c(56, 58, 64),
-  quality_father = c(60, 64, 60)
+expected_df_no_ratio <- data.frame(
+  ID = "NA19685",
+  chromosome = "6",
+  start = 32489853,
+  end=  33499925,
+  group = "iso_mat",
+  n_snps = 5L,
+  geno_coded = I(setNames(list(c("133", "133", "121", "122", "133")), "1")),
+  ratio_father = NA_real_,
+  ratio_mother = NA_real_,
+  ratio_proband = NA_real_
 )
+
+file <- system.file(package = "UPDhmm", "extdata", "test.vcf.gz")
+input <- VariantAnnotation::readVcf(file)
+
+input <- vcfCheck(
+  largeCollapsedVcf = input,
+  father = "NA19689", mother = "NA19688",
+  proband = "NA19685", check_quality = TRUE
+)
+
+# Load the default HMM
+utils::data("hmm", package = "UPDhmm")
+
+input <- applyViterbi(input, hmm)
+
+# Split processed VCF by chromosome and select chromosome 6
+split_vcf <- split(input, f = GenomicRanges::seqnames(input))
+chr6 <- split_vcf[["6"]]
+
+# Expected mean sequencing depth per individual for chromosome 6
+total_mean <- c(father = 902/15, mother = 886/15, proband = 904/15)
+
+
+
 
 # ------------------------------------------------------------------------- #
-# Test basic block merging with full quality information
+# Test blocksVcf() with add_ratios = FALSE
 # ------------------------------------------------------------------------- #
 
 test_that("Test if simplification into blocks works", {
-    out <- blocksVcf(input)
+    out <- blocksVcf(largeCollapsedVcf = chr6)
     
     out <- as.data.frame(out)
     
-    expect_equal(out, expected_df)
+    expect_equal(out, expected_df_no_ratio)
     expect_s3_class(out, "data.frame")
 })
 
 # ------------------------------------------------------------------------- #
-# Test basic block merging without quality metrics
+# Test blocksVcf() with add_ratios = TRUE using DP field
 # ------------------------------------------------------------------------- #
 
 test_that("Test if simplification into blocks works", {
-  out <- blocksVcf(input[, !(names(input) %in% c("quality_proband", "quality_mother", "quality_father"))])
-  
-  out <- as.data.frame(out)
-  
-  expected_no_quality <- expected_df[, !(names(expected_df) %in% c(
-    "total_sum_quality_proband", "total_sum_quality_mother", "total_sum_quality_father",
-    "total_count_quality_proband", "total_count_quality_mother", "total_count_quality_father"
-  ))]
-  out_no_quality <- out[, names(expected_no_quality), drop = FALSE]
-  
-  expect_equal(out_no_quality, out_no_quality)
-  expect_s3_class(out, "data.frame")
+    out <- blocksVcf(largeCollapsedVcf = chr6, add_ratios = TRUE, field_DP = "DP", total_mean = total_mean)
+
+    out <- as.data.frame(out)
+
+    expect_equal(out, expected_df, tolerance = 1e-6)
+    expect_s3_class(out, "data.frame")
 })
 
 # ------------------------------------------------------------------------- #
-# Introduce NA values to test robustness of block-level aggregation
-# ------------------------------------------------------------------------- #
-
-input$quality_proband[1] <- NA
-expected_df$total_sum_quality_proband <- expected_df$total_sum_quality_proband - 60
-expected_df$total_count_quality_proband <- expected_df$total_count_quality_proband - 1
-
-# ------------------------------------------------------------------------- #
-# Test block merging with NA values in quality
+# Test blocksVcf() with add_ratios = TRUE using AD field
 # ------------------------------------------------------------------------- #
 
 test_that("Test if simplification into blocks works", {
-  out <- blocksVcf(input)
-  
-  out <- as.data.frame(out)
-  
-  expect_equal(out, expected_df)
-  expect_s3_class(out, "data.frame")
+    out <- blocksVcf(largeCollapsedVcf = chr6, add_ratios = TRUE, field_DP = "AD", total_mean = total_mean)
+
+    out <- as.data.frame(out)
+
+    expect_equal(out, expected_df, tolerance = 1e-6)
+    expect_s3_class(out, "data.frame")
+})
+
+# ------------------------------------------------------------------------- #
+# Test blocksVcf() with add_ratios = TRUE and no field_DP defined
+# ------------------------------------------------------------------------- #
+
+test_that("Test if simplification into blocks works", {
+    out <- blocksVcf(largeCollapsedVcf = chr6, add_ratios = TRUE, total_mean = total_mean)
+
+    out <- as.data.frame(out)
+
+    expect_equal(out, expected_df, tolerance = 1e-6)
+    expect_s3_class(out, "data.frame")
+})
+
+# ------------------------------------------------------------------------- #
+# Modify DP and AD to introduce NA values
+# ------------------------------------------------------------------------- #
+g_dp <- VariantAnnotation::geno(input)$DP
+g_ad <- VariantAnnotation::geno(input)$AD
+
+# Introduce NA in proband DP at the first variant
+g_dp[1, "proband"] <- NA
+VariantAnnotation::geno(input)$DP <- g_dp
+
+# Introduce NA in proband AD (both alleles NA) at the first variant
+g_ad[1, "proband"][[1]] <- c(NA,NA)
+VariantAnnotation::geno(input)$AD <- g_ad
+
+split_vcf <- split(input, f = GenomicRanges::seqnames(input))
+chr6 <- split_vcf[["6"]]
+
+# Expected proband ratio after introducing NA values
+expected_df$ratio_proband <- 0.974526
+
+total_mean <- c(father = 902/15, mother = 886/15, proband = 844/14)
+
+
+# ------------------------------------------------------------------------- #
+# Repeat the three tests under conditions where NA values are present
+# ------------------------------------------------------------------------- #
+
+test_that("Test if simplification into blocks works", {
+    out <- blocksVcf(largeCollapsedVcf = chr6, add_ratios = TRUE, field_DP = "DP", total_mean = total_mean)
+
+    out <- as.data.frame(out)
+
+    expect_equal(out, expected_df, tolerance = 1e-6)
+    expect_s3_class(out, "data.frame")
+})
+
+
+test_that("Test if simplification into blocks works", {
+    out <- blocksVcf(largeCollapsedVcf = chr6, add_ratios = TRUE, field_DP = "AD", total_mean = total_mean)
+
+    out <- as.data.frame(out)
+
+    expect_equal(out, expected_df, tolerance = 1e-6)
+    expect_s3_class(out, "data.frame")
+})
+
+test_that("Test if simplification into blocks works", {
+    out <- blocksVcf(largeCollapsedVcf = chr6, add_ratios = TRUE, total_mean = total_mean)
+
+    out <- as.data.frame(out)
+
+    expect_equal(out, expected_df, tolerance = 1e-6)
+    expect_s3_class(out, "data.frame")
 })

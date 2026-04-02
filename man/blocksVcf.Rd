@@ -2,28 +2,49 @@
 % Please edit documentation in R/blocksVcf.R
 \name{blocksVcf}
 \alias{blocksVcf}
-\title{Collapse contiguous variants with the same inferred state into blocks}
+\title{Collapse contiguous variants into genomic blocks based on HMM states}
 \usage{
-blocksVcf(df)
+blocksVcf(
+  largeCollapsedVcf,
+  add_ratios = FALSE,
+  field_DP = NULL,
+  total_mean = NULL,
+  ratio_cols = c("ratio_father", "ratio_mother", "ratio_proband")
+)
 }
 \arguments{
-\item{df}{A data.frame produced by \code{asDfVcf()}.}
+\item{largeCollapsedVcf}{A CollapsedVCF object containing the metadata
+columns \emph{states} (inferred HMM states) and \emph{geno_coded}
+(numeric genotype codes). This object should be the result of first applying
+\code{vcfCheck()} and then \code{applyViterbi()}.}
+
+\item{add_ratios}{Logical; default = FALSE.
+
+If TRUE, computes normalized per-block read depth ratios for each individual based on total mean depth.}
+
+\item{field_DP}{Optional character string specifying which VCF FORMAT field to use for depth metrics (e.g., DP, AD, or a custom field).}
+
+\item{total_mean}{Optional numeric vector of per-sample mean read depths across the entire VCF, used to normalize per-block depth ratios computed via \code{computeTrioTotals()} in \code{calculateEvents()}.}
+
+\item{ratio_cols}{Character vector of column names to assign to the ratio output
+when total_mean is provided. Default: \code{c("ratio_proband", "ratio_mother", "ratio_father")}.}
 }
 \value{
-A data.frame with one row per block. Columns include:
+A data.frame with one row per block, containing:
 \itemize{
-\item ID – sample identifier
-\item seqnames, start, end – genomic coordinates
-\item group – inferred state of the block
-\item n_snps – number of variants in the block
-\item geno_coded – list of numeric genotype codes per block
-\item summed and counted quality/depth metrics per block (if present)
+\item \code{ID} – sample identifier
+\item \code{chromosome}, start, end – genomic coordinates
+\item \code{group} – HMM state of the block
+\item \code{n_snps} – number of variants in the block
+\item \code{geno_coded} – list of numeric genotype codes per block
+\item Ratio columns relative to total_mean (always present; if add_ratios = FALSE, filled with NA)
 }
 }
 \description{
-This function identifies consecutive variants in a data.frame
-(produced by \code{asDfVcf()}) that share the same inferred state
-and merges them into contiguous "blocks". Each block summarizes its start
-and end positions, the number of variants it contains, genotype codings, and
-optionally summed quality or depth metrics if the columns exist in the input.
+This function constructs block-level representations from a CollapsedVCF object.
+Consecutive variants sharing the same inferred HMM state are grouped into blocks.
+For each block, the function summarizes genomic coordinates, number of variants,
+HMM state, genotype codes and optionally computes per-block depth ratios normalized
+by per-sample mean read depth across the entire VCF.
 }
+\keyword{internal}

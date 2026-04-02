@@ -2,7 +2,6 @@
 
 file <- system.file(package = "UPDhmm", "extdata", "test.vcf.gz")
 expected_vcf <- VariantAnnotation::readVcf(file)
-colnames(expected_vcf) <- c("proband", "father", "mother")
 S4Vectors::mcols(expected_vcf)$states <-
     c("iso_mat", "iso_mat", "iso_mat")
 
@@ -17,8 +16,6 @@ input <- vcfCheck(
 
 # Load the default HMM
 utils::data("hmm", package = "UPDhmm")
-hmm <- hmm
-
 
 test_that("Test if viterbi algorithm works", {
     out <- applyViterbi(

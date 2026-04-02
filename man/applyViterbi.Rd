@@ -9,10 +9,10 @@ applyViterbi(largeCollapsedVcf, hmm)
 \arguments{
 \item{largeCollapsedVcf}{A CollapsedVCF object.}
 
-\item{hmm}{A Hidden Markov Model object.}
+\item{hmm}{Hidden Markov Model used to infer the events}
 }
 \value{
-The input CollapsedVCF object updated with a new metadata column \emph{states},
+the input largeCollapsedVcf object updated with a new metadata column \emph{states},
 which contains the inferred hidden state for each variant.
 }
 \description{
@@ -25,3 +25,4 @@ It expects that the metadata column \emph{geno_coded} exists, containing a numer
 encoding of the genotypes. This column is automatically generated when the VCF
 is processed with \code{vcfCheck()} from the UPDhmm package.
 }
+\keyword{internal}

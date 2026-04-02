@@ -17,18 +17,9 @@ calculateEvents(
 \item{largeCollapsedVcf}{A VCF previously processed
 with \code{vcfCheck()} function from UPDhmm package.}
 
-\item{hmm}{Optional custom Hidden Markov Model object Default = NULL.
-
-If NULL, the function uses the default Mendelian HMM included in the UPDhmm package.
-A custom HMM must be a list following the structure of the HMM package, containing:
-
-\itemize{
-\item States – character vector of hidden state names
-\item Symbols – vector of allowed observation symbols (genotype codes)
-\item startProbs – named vector of initial state probabilities
-\item transProbs – state transition probability matrix
-\item emissionProbs – matrix of emission probabilities for each state × symbol
-}}
+\item{hmm}{Default = \code{NULL}. If no arguments are added, the package
+will use the default HMM already implemented, based on Mendelian
+inheritance.}
 
 \item{field_DP}{Default = NULL. Character string specifying which FORMAT field in the VCF
 contains the read depth information.
@@ -43,6 +34,11 @@ e.g. \emph{field = "NR"} or \emph{field_DP}.}
 If TRUE, per-sample read depth sums and counts of valid calls are computed;
 these values are then used to calculate the genome-wide mean per individual,
 which is used to normalize the per-block depth ratios.}
+
+\item{add_ratios}{Logical; default = FALSE.
+
+If TRUE, per-sample mean depth is computed across the entire VCF and
+used to calculate normalized per-block depth ratios.}
 
 \item{BPPARAM}{Parallelization settings, passed to
 \link[BiocParallel]{bplapply}.
@@ -59,18 +55,18 @@ the number of workers may be automatically limited (usually less or equal to 2).
 If TRUE, progress messages will be printed during processing.}
 }
 \value{
-A data.frame summarizing all detected UPD-like events.
+A \code{data.frame} object containing all detected events in the provided trio.
 Columns include:
 \itemize{
-\item seqnames – chromosome name
+\item chromosome – chromosome name
 \item start, end – genomic coordinates
 \item group – inferred HMM state
 \item n_snps – number of SNPs in the block
 \item n_mendelian_error – number of Mendelian errors in the block
-\item depth-ratio metrics (if add_ratios = TRUE)
+\item depth-ratio metrics (always present; if add_ratios = FALSE, filled with NA)
 }
 
-If no events are detected, returns an empty data.frame.
+If no events are found, the function will return an empty \code{data.frame}.
 }
 \description{
 This function detects regions of uniparental disomy (UPD) in trio genotypes
@@ -97,6 +93,20 @@ This step can be executed in series or in parallel depending on the BPPARAM para
 \emph{3. Consolidation and filtering of detected UPD events}
 
 All blocks from all chromosomes are combined into a single data.frame and filtered to retain only those with more than one SNP, a state different from normal, and located on autosomes. The final output summarizes detected UPD events, including genomic coordinates, HMM state, number of SNPs, number of Mendelian errors per block, and, if calculated, per-block depth ratios.
+}
+\details{
+\subsection{Custom HMM structure. The user can implement its own HMM.}{
+
+A custom HMM must be a list following the structure of the HMM package, containing:
+
+\itemize{
+\item States – character vector of hidden state names
+\item Symbols – vector of allowed observation symbols (genotype codes)
+\item startProbs – named vector of initial state probabilities
+\item transProbs – state transition probability matrix
+\item emissionProbs – matrix of emission probabilities for each state × symbol
+}
+}
 }
 \examples{
 file <- system.file(package = "UPDhmm", "extdata", "test_het_mat.vcf.gz")

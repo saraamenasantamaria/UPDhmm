@@ -1,81 +1,112 @@
-#' Collapse contiguous variants with the same inferred state into blocks
+#' Collapse contiguous variants into genomic blocks based on HMM states
 #'
-#' This function identifies consecutive variants in a data.frame
-#' (produced by \code{asDfVcf()}) that share the same inferred state 
-#' and merges them into contiguous "blocks". Each block summarizes its start 
-#' and end positions, the number of variants it contains, genotype codings, and 
-#' optionally summed quality or depth metrics if the columns exist in the input.
+#' This function constructs block-level representations from a CollapsedVCF object. 
+#' Consecutive variants sharing the same inferred HMM state are grouped into blocks. 
+#' For each block, the function summarizes genomic coordinates, number of variants, 
+#' HMM state, genotype codes and optionally computes per-block depth ratios normalized 
+#' by per-sample mean read depth across the entire VCF.
 #'
-#' @param df A data.frame produced by \code{asDfVcf()}.
+#' @param largeCollapsedVcf A CollapsedVCF object containing the metadata 
+#'   columns *states* (inferred HMM states) and *geno_coded*
+#'   (numeric genotype codes). This object should be the result of first applying
+#'   \code{vcfCheck()} and then \code{applyViterbi()}.
+#'   
+#' @param add_ratios Logical; default = FALSE.
+#' 
+#' If TRUE, computes normalized per-block read depth ratios for each individual based on total mean depth.
 #'
-#' @return A data.frame with one row per block. Columns include:
-#' \itemize{
-#'   \item ID – sample identifier
-#'   \item seqnames, start, end – genomic coordinates
-#'   \item group – inferred state of the block
-#'   \item n_snps – number of variants in the block
-#'   \item geno_coded – list of numeric genotype codes per block
-#'   \item summed and counted quality/depth metrics per block (if present)
-#' }
+#' @param field_DP Optional character string specifying which VCF FORMAT field to use for depth metrics (e.g., DP, AD, or a custom field). 
 #'
-blocksVcf <- function(df) {
+#' @param total_mean Optional numeric vector of per-sample mean read depths across the entire VCF, used to normalize per-block depth ratios computed via \code{computeTrioTotals()} in \code{calculateEvents()}.
+#'
+#' @param ratio_cols Character vector of column names to assign to the ratio output 
+#'   when total_mean is provided. Default: \code{c("ratio_proband", "ratio_mother", "ratio_father")}.
+#'
+#'
+#' @return A data.frame with one row per block, containing:
+#'   \itemize{
+#'     \item \code{ID} – sample identifier
+#'     \item \code{chromosome}, start, end – genomic coordinates
+#'     \item \code{group} – HMM state of the block
+#'     \item \code{n_snps} – number of variants in the block
+#'     \item \code{geno_coded} – list of numeric genotype codes per block
+#'     \item Ratio columns relative to total_mean (always present; if add_ratios = FALSE, filled with NA)
 
-  ## Identify contiguous blocks of the same state using run-length encoding
-  r <- rle(df$group)
-  n_blocks <- length(r$lengths) # number of contiguous blocks
-  ends_idx <- cumsum(r$lengths) # ending index of each block in the original df
-  starts_idx <- ends_idx - r$lengths + 1L # starting index of each block
-  block_idx <- rep(seq_len(n_blocks), r$lengths) # vector mapping each variant to a block
+#'   }
+#' @keywords internal
+#'
+blocksVcf <- function(largeCollapsedVcf, add_ratios = FALSE, field_DP = NULL, total_mean = NULL, ratio_cols = c("ratio_father", "ratio_mother", "ratio_proband")) {
+  
+  # Extract metadata and genotype matrices
+  mcol <- S4Vectors::mcols(largeCollapsedVcf)
+  coldata <- SummarizedExperiment::colData(largeCollapsedVcf)
+  geno <- VariantAnnotation::geno(largeCollapsedVcf)
 
-  sample_ID <- unique(df$ID)[1]
+  # Extract per-variant information for block construction
+  states <- mcol$states
+  geno_coded <- mcol$geno_coded
+  seqnames_chr <- as.character(GenomicRanges::seqnames(largeCollapsedVcf))
+  start_pos <- GenomicRanges::start(largeCollapsedVcf)
+  end_pos <- GenomicRanges::end(largeCollapsedVcf)
+  sample_ID <- coldata$ID[colnames(largeCollapsedVcf) == "proband"]
 
-  # Extract block-level genomic information
-  seqnames_block <- df$seqnames[starts_idx]  # chromosome per block
-  start_block    <- df$start[starts_idx]     # start position of block
-  end_block      <- df$end[ends_idx]         # end position of block
+  # Identify contiguous blocks of variants sharing the same HMM state
+  r <- rle(states)
+  n_blocks <- length(r$lengths)
+  ends_idx <- cumsum(r$lengths)
+  starts_idx <- ends_idx - r$lengths + 1
 
-  ## Collect genotype codings for each block
-  geno_lists <- split(df$geno_coded, block_idx)
-
-  ## --------------------------------------------------------------
-  ## Optional: sum and count quality metrics per block
-  ## --------------------------------------------------------------
-  quality_cols <- intersect(c("quality_proband", "quality_mother", "quality_father"), names(df))
-  sum_matrix <- count_matrix <- NULL
-
-  if (length(quality_cols) > 0L) {
-
-    quality_matrix <- as.matrix(df[, quality_cols, drop = FALSE])
-
-    # Sum quality values per block, ignoring NA
-    sum_matrix <- as.data.frame(rowsum(quality_matrix, group = block_idx, na.rm = TRUE))
-    
-    # Count non-NA values per block
-    count_matrix <- as.data.frame(rowsum(1L * (!is.na(quality_matrix)), group = block_idx))
-    
-    # Rename columns for clarity
-    colnames(sum_matrix)   <- paste0("total_sum_", quality_cols)
-    colnames(count_matrix) <- paste0("total_count_", quality_cols)
-
-  }
-
-  ## --------------------------------------------------------------
-  ## Build the resulting data.frame
-  ## --------------------------------------------------------------
-  result <- data.frame(
-    ID         = sample_ID,
-    seqnames   = seqnames_block,
-    start      = start_block,
-    end        = end_block,
-    group      = r$values,
-    n_snps     = r$lengths,
-    geno_coded = I(geno_lists)
+  # Construct initial data.frame with block information
+  df <- data.frame(
+    ID       = sample_ID,
+    chromosome = seqnames_chr[starts_idx],
+    start    = start_pos[starts_idx],
+    end      = end_pos[ends_idx],
+    group    = r$values,
+    n_snps   = r$lengths,
+    geno_coded = I(split(geno_coded, rep(seq_len(n_blocks), r$lengths)))
   )
   
-  ## Attach quality metrics if present
-  if (!is.null(sum_matrix)) {
-    result <- cbind(result, sum_matrix, count_matrix)
+  df[ratio_cols] <- NA_real_
+  
+  # Optionally compute per-block depth ratios
+  if (add_ratios) {
+    dp_field <- if (!is.null(field_DP) && field_DP %in% names(geno)) { field_DP } 
+                else if ("DP" %in% names(geno)) { "DP" } 
+                else if ("AD" %in% names(geno)) { "AD" } 
+                else { NULL }
+    
+    if (!is.null(dp_field)) {
+      if (dp_field == "AD") {
+        quality_matrix <- apply(geno$AD, 2, function(col) {
+          vapply(col, function(x) {if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)}, numeric(1))
+        })
+        
+      } else {
+        quality_matrix <- as.matrix(geno[[dp_field]])
+      }
+      
+      block_idx <- rep(seq_len(n_blocks), r$lengths)
+
+      # Sum quality values per block, ignoring NA
+      sums <- rowsum(quality_matrix, group = block_idx, na.rm = TRUE)
+    
+      # Count non-NA values per block
+      counts <- rowsum(1L * (!is.na(quality_matrix)), group = block_idx)
+
+      # Compute means per block
+      means <- sums / pmax(counts, 1)
+      means[counts == 0] <- NA
+      
+      if (!is.null(total_mean)) {
+        means <- means[, names(total_mean), drop = FALSE]
+        # Compute ratios relative to total_mean
+        ratio_matrix <- sweep(means, 2, total_mean, FUN = "/")
+        colnames(ratio_matrix) <- ratio_cols
+        df[, ratio_cols] <- as.data.frame(ratio_matrix)
+      } 
+    }
   }
 
-  return(result)
+  return(df)
 }

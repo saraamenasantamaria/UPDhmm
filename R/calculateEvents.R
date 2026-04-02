@@ -1,43 +1,28 @@
 #' Detect UPD events in trio VCFs using a HMM
 #'
-#' This function detects regions of uniparental disomy (UPD) in trio genotypes 
-#' by applying a Hidden Markov Model (HMM). It runs the Viterbi algorithm 
-#' chromosome by chromosome, optionally computes per-sample read depth ratios, 
-#' identifies consecutive variants sharing the same inferred state, and summarizes 
-#' them into blocks. Blocks are then filtered to retain only those with more than 
-#' one SNP, non-normal HMM states, and located on autosomes. The resulting table 
-#' includes genomic coordinates, HMM state, number of SNPs, number of Mendelian 
-#' errors, and optionally per-block depth-ratio metrics for downstream analysis.
+#' This function predicts the hidden states by applying the Viterbi algorithm
+#' using the Hidden Markov Model (HMM) from the UPDhmm package. It takes the
+#' genotypes of the trio as input and includes a final step to simplify the
+#' results into blocks.
 #'
 #' @param largeCollapsedVcf A VCF previously processed 
 #'   with \code{vcfCheck()} function from UPDhmm package.
 #'
-#' @param hmm Optional custom Hidden Markov Model object Default = NULL. 
-#'  
-#'   If NULL, the function uses the default Mendelian HMM included in the UPDhmm package.  
-#'   A custom HMM must be a list following the structure of the HMM package, containing:
-#'   
-#'   \itemize{
-#'     \item States – character vector of hidden state names
-#'     \item Symbols – vector of allowed observation symbols (genotype codes)
-#'     \item startProbs – named vector of initial state probabilities
-#'     \item transProbs – state transition probability matrix
-#'     \item emissionProbs – matrix of emission probabilities for each state × symbol
-#'   }
-#'   
-#' @param field_DP Default = NULL. Character string specifying which FORMAT field in the VCF
-#' contains the read depth information.
-#' 
-#' If NULL (default), the function will automatically try *DP* (standard depth)
-#' or *AD* (allelic depths, summed across alleles).
-#' Use this parameter if your VCF uses a non-standard field name for depth,
-#' e.g. *field = "NR"* or *field_DP*.
+#' @param hmm Default = `NULL`. If no arguments are added, the package 
+#' will use the default HMM already implemented, based on Mendelian 
+#' inheritance. 
 #'
+#' @param field_DP Default = `NULL`. Character string specifying which FORMAT field in the VCF
+#' contains the read depth information to use in `addRatioDepth()`.
+#' If `NULL` (default), the function will automatically try `"DP"` (standard depth)
+#' or `"AD"` (allelic depths, summed across alleles).
+#' Use this parameter if your VCF uses a non-standard field name for depth,
+#' e.g. `field = "NR"` or `"field_DP"`.
+#' 
 #' @param add_ratios Logical; default = FALSE.
 #'   
-#'   If TRUE, per-sample read depth sums and counts of valid calls are computed; 
-#'   these values are then used to calculate the genome-wide mean per individual, 
-#'   which is used to normalize the per-block depth ratios.
+#'   If TRUE, per-sample mean depth is computed across the entire VCF and 
+#'   used to calculate normalized per-block depth ratios.
 #'
 #' @param BPPARAM Parallelization settings, passed to
 #'   \link[BiocParallel]{bplapply}.
@@ -54,6 +39,30 @@
 #'   If TRUE, progress messages will be printed during processing.
 #'
 #' @details
+#' ### Custom HMM structure. The user can implement its own HMM.
+#' A custom HMM must be a list following the structure of the HMM package, containing:
+#'   
+#'   \itemize{
+#'     \item States – character vector of hidden state names
+#'     \item Symbols – vector of allowed observation symbols (genotype codes)
+#'     \item startProbs – named vector of initial state probabilities
+#'     \item transProbs – state transition probability matrix
+#'     \item emissionProbs – matrix of emission probabilities for each state × symbol
+#'   }
+#'   
+#' @return A `data.frame` object containing all detected events in the provided trio. 
+#' Columns include:
+#' \itemize{
+#'   \item chromosome – chromosome name  
+#'   \item start, end – genomic coordinates  
+#'   \item group – inferred HMM state  
+#'   \item n_snps – number of SNPs in the block  
+#'   \item n_mendelian_error – number of Mendelian errors in the block  
+#'   \item depth-ratio metrics (always present; if add_ratios = FALSE, filled with NA)
+
+#' }
+#'
+#' If no events are found, the function will return an empty `data.frame`.
 #'
 #' The function performs the following major steps:
 #'
@@ -110,140 +119,183 @@ calculateEvents <- function(largeCollapsedVcf,
                             add_ratios = FALSE,
                             BPPARAM = BiocParallel::SerialParam(),
                             verbose = FALSE) {
-  ## --------------------------------------------------------------
-  ## 0. Input validation
-  ## --------------------------------------------------------------
+  # 0. Check input
   if (!inherits(largeCollapsedVcf, "CollapsedVCF")) {
     stop("Argument 'largeCollapsedVcf' must be a CollapsedVCF object.")
   }
-
-  # Load the default HMM from the UPDhmm package if no custom HMM is provided
+  
+  # Check trio sample names and order
+  expected_samples <- c("father", "mother", "proband")
+  current_samples <- colnames(largeCollapsedVcf)
+  
+  # Check that required samples are present
+  if (!all(expected_samples %in% current_samples)) {
+    stop(
+      "VCF samples must be named 'father', 'mother', and 'proband'. ",
+      "Please preprocess the VCF using vcfCheck()."
+    )
+  }
+  
+  # Reorder samples if necessary
+  if (!identical(current_samples, expected_samples)) {
+    largeCollapsedVcf <- largeCollapsedVcf[, expected_samples]
+  }
+  
+  
   if (is.null(hmm)) {
     utils::data("hmm", package = "UPDhmm", envir = environment())
   }
-
-  ## --------------------------------------------------------------
-  ## 1. Optional: compute per-sample depth/quality ratios
-  ## --------------------------------------------------------------
   
-  total_sum_per_individual <- total_valid_per_individual <- NULL
+  # 1. Optional: compute per-sample depth/quality ratios
+  mean_depth_per_individual <- NULL
   if (add_ratios) {
-    trio_totals <- computeTrioTotals(largeCollapsedVcf, field_DP = field_DP)
-    total_sum_per_individual <- trio_totals$total_sum
-    total_valid_per_individual <- trio_totals$total_valid
+    mean_depth_per_individual <- computeTrioTotals(vcf = largeCollapsedVcf, field_DP = field_DP)
   }
-
-  ## --------------------------------------------------------------
-  ## 2. Split VCF by chromosome
-  ## --------------------------------------------------------------
-  split_vcf_raw <- split(
-    largeCollapsedVcf, GenomicRanges::seqnames(largeCollapsedVcf)
-  )
-  split_vcf_raw <- split_vcf_raw[lengths(split_vcf_raw) > 0L]
-
-  if (length(split_vcf_raw) == 0L) {
+  
+  # 2. Split VCF into chromosomes
+  split_vcf_raw <- split(largeCollapsedVcf,
+                         f = GenomicRanges::seqnames(largeCollapsedVcf))
+  split_vcf_raw <- split_vcf_raw[lengths(split_vcf_raw) > 0]
+  
+  if (length(split_vcf_raw) == 0) {
     if (verbose) message("No chromosomes found in VCF.")
-    return(data.frame())
+    return(data.frame(
+              ID = character(),
+              chromosome = character(),
+              start = integer(),
+              end = integer(),
+              group = character(),
+              n_snps = integer(),
+              ratio_father = numeric(),
+              ratio_mother = numeric(),
+              ratio_proband = numeric(),
+              n_mendelian_error = integer(),
+              stringsAsFactors = FALSE
+            )
+    ) 
   }
-
+  
   if (verbose) message("Processing ", length(split_vcf_raw), " chromosomes...")
   
   # Determine which genotype codes correspond to Mendelian errors (lowest emission probability for 'normal' state)
   emission_probs <- hmm$emissionProbs["normal", ]
   mendelian_error_values <- names(emission_probs[emission_probs == min(emission_probs)])
-
-  ## --------------------------------------------------------------
-  ## 3. Run HMM pipeline per chromosome
-  ## --------------------------------------------------------------
-  blocks_state <- if (inherits(BPPARAM, "SerialParam")) {
-    lapply(split_vcf_raw, processChromosome,
-           total_sum = total_sum_per_individual,
-           total_valid = total_valid_per_individual,
-           field_DP = field_DP,
-           add_ratios = add_ratios,
-           hmm = hmm, 
-           mendelian_error_values = mendelian_error_values)
+  
+  # 3. Run pipeline per chromosome (serial or parallel)
+  if (inherits(BPPARAM, "SerialParam")) {
+    blocks_state <- lapply(split_vcf_raw, processChromosome,
+                           total_mean = mean_depth_per_individual,
+                           field_DP = field_DP,
+                           add_ratios = add_ratios,
+                           hmm = hmm, 
+                           mendelian_error_values = mendelian_error_values)
   } else {
-    BiocParallel::bplapply(split_vcf_raw, processChromosome,
-                           total_sum = total_sum_per_individual,
-                           total_valid = total_valid_per_individual,
+    blocks_state <- BiocParallel::bplapply(split_vcf_raw, processChromosome,
+                           total_mean = mean_depth_per_individual,
                            field_DP = field_DP,
                            add_ratios = add_ratios,
                            hmm = hmm, BPPARAM = BPPARAM, 
                            mendelian_error_values = mendelian_error_values)
   }
-
+  
+  
+  
+  # Drop NULLs  
   blocks_state <- Filter(Negate(is.null), blocks_state)
-  if (length(blocks_state) == 0L) {
+  if (length(blocks_state) == 0) {
     stop("calculateEvents failed: no valid chromosomes processed. 
-       Likely cause: applyViterbi does not recognize all GT or 
+       Likely cause: applyViterbi does not recognized all GT or 
        check your VCF formatting and trio sample IDs.")
   }
-
-  ## --------------------------------------------------------------
-  ## 4. Merge chromosome-level results and filter events
-  ## --------------------------------------------------------------
+  
+  # 4. Clean results
   def_blocks_states <- do.call(rbind, blocks_state)
   
-  # Keep only blocks with >1 SNP, non-normal state, and autosomal chromosomes
-  filtered_def_blocks_states <- def_blocks_states[def_blocks_states$n_snps > 1 & def_blocks_states$group != "normal" & !(def_blocks_states$seqnames %in% c("chrX","X","chrY","Y")),]
-
-  if (nrow(filtered_def_blocks_states) == 0L) {
+  # 5. Filter events (skip normal state, low SNPs, sex chromosomes)
+  filtered_def_blocks_states <- def_blocks_states[
+    def_blocks_states$n_snps > 1 &
+      def_blocks_states$group != "normal" &
+      !(def_blocks_states$chromosome %in% c("chrX", "X")), ]
+  
+  if (nrow(filtered_def_blocks_states) == 0) {
     if (verbose) message("No non-normal events found.")
-    return(data.frame())
+    return(data.frame(
+      ID = character(),
+      chromosome = character(),
+      start = integer(),
+      end = integer(),
+      group = character(),
+      n_snps = integer(),
+      ratio_father = numeric(),
+      ratio_mother = numeric(),
+      ratio_proband = numeric(),
+      n_mendelian_error = integer(),
+      stringsAsFactors = FALSE
+    )
+    ) 
   }
-
+  
   if (verbose) {
     message("Found ", nrow(filtered_def_blocks_states), " candidate events.")
   }
+  
   rownames(filtered_def_blocks_states) <- NULL
   return(filtered_def_blocks_states)
 }
 
-
-computeTrioTotals <- function(vcf, expected_samples = c("proband","mother","father"), field_DP = NULL) {
-  total_sum <- total_valid <- NULL
+#' Compute per-sample total mean read depth for a trio
+#' 
+#' This internal helper function calculates the per-sample total mean read depth 
+#' across a VCF for a trio, optionally using a specified FORMAT field.
+#' The resulting totals are used to normalize per-block depth ratios in 
+#' downstream analyses.
+#' 
+#' @param vcf A CollapsedVCF object containing the trio genotype data.
+#' @param expected_samples Character vector of length 3 specifying the column
+#'   order of the trio: proband, mother, father. Default = c("proband","mother","father").
+#' @param field_DP Optional character string specifying the FORMAT field in the VCF
+#'   to use for depth calculations. 
+#'   
+#' @details
+#'
+#' The function selects the depth or coverage field to use, giving priority to field_DP if specified and present in the VCF, followed by `DP` (standard depth) and then `AD` (allelic depth) if available.  
+#' If AD is used, the depth for each variant is calculated as the sum across all alleles per sample.  
+#' NA values are ignored when computing the per-sample mean depth.
+#' 
+#' @return Numeric vector of per-sample mean read depths, named according to 
+#'   expected_samples. Returns NULL if no valid depth field is found.
+#'
+#' @keywords internal
+#' 
+computeTrioTotals <- function(vcf, expected_samples = c("father", "mother", "proband"), field_DP = NULL) {
+  mean_depth <- NULL
   geno_list <- VariantAnnotation::geno(vcf)
   
-  # ---------------------------------------------------------------
   # Determine which depth/coverage field to use for calculations
-  # Priority:
-  # 1) Use 'field_DP' if specified and exists in VCF
-  # 2) Use standard 'DP' field if present
-  # 3) Use 'AD' (allele depths) if present
-  # 4) Otherwise, no depth field available
-  # ---------------------------------------------------------------
-  
-  dp_field <- if (!is.null(field_DP) && field_DP %in% names(geno_list)) { field_DP 
-              } else if ("DP" %in% names(geno_list)) { "DP" 
-              } else if ("AD" %in% names(geno_list)) { "AD" 
-              } else { NULL }
+  dp_field <- if (!is.null(field_DP) && field_DP %in% names(geno_list)) { field_DP } 
+  else if ("DP" %in% names(geno_list)) { "DP" } 
+  else if ("AD" %in% names(geno_list)) { "AD" } 
+  else { NULL }
   
   if (!is.null(dp_field)) {
     if (dp_field == "AD") {
       # If using allele depths (AD), sum across all alleles for each sample
       # Handle cases where all values are NA by returning NA
-      quality_matrix <- apply(geno_list$AD, 2, function(col) {
+      depth_matrix <- apply(geno_list$AD, 2, function(col) {
         vapply(col, function(x) {if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)}, numeric(1))
       })
-      
     } else {
-      quality_matrix <- as.matrix(geno_list[[dp_field]])
+      depth_matrix <- as.matrix(geno_list[[dp_field]])
     }
-      
-    # Compute total read depth per individual, ignoring NAs
-    total_sum <- colSums(quality_matrix, na.rm = TRUE)
     
-    # Compute number of valid (non-NA) calls per individual
-    total_valid <- colSums(!is.na(quality_matrix))
+    # Compute mean depth per individual, ignoring NA values
+    mean_depth <- colMeans(depth_matrix, na.rm = TRUE)
     
-    # Ensure order proband, mother, father
-    total_sum <- total_sum[expected_samples]
-    total_valid <- total_valid[expected_samples]
+    # Ensure the order proband, mother, father
+    mean_depth <- mean_depth[expected_samples]
     
   } else {
     warning("No DP or AD field found in VCF.")
   }
-  
-  list(total_sum = total_sum, total_valid = total_valid)
+  return(mean_depth)
 }

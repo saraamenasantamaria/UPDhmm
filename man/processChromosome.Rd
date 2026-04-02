@@ -9,14 +9,7 @@ processChromosome(
   hmm,
   add_ratios = FALSE,
   field_DP = NULL,
-  total_sum = NULL,
-  total_valid = NULL,
-  quality_cols = c("proband", "mother", "father"),
-  sum_cols = c("total_sum_quality_proband", "total_sum_quality_mother",
-    "total_sum_quality_father"),
-  count_cols = c("total_count_quality_proband", "total_count_quality_mother",
-    "total_count_quality_father"),
-  ratio_cols = c("ratio_proband", "ratio_mother", "ratio_father"),
+  total_mean = NULL,
   mendelian_error_values
 )
 }
@@ -25,30 +18,18 @@ processChromosome(
 
 \item{hmm}{A Hidden Markov Model object.}
 
-\item{add_ratios}{Logical; default = FALSE.
+\item{add_ratios}{Logical; default = FALSE.}
+
+\item{field_DP}{Default = \code{NULL}. Character string specifying which FORMAT field in the VCF
+contains the read depth information to use in \code{addRatioDepth()}.
+If \code{NULL} (default), the function will automatically try \code{"DP"} (standard depth)
+or \code{"AD"} (allelic depths, summed across alleles).
+Use this parameter if your VCF uses a non-standard field name for depth,
+e.g. \code{field = "NR"} or \code{"field_DP"}.
 
 If TRUE, computes normalized per-block read depth ratios for each individual based on total mean depth.}
 
-\item{field_DP}{Optional character string specifying which VCF FORMAT field to use for depth metrics (e.g., DP, AD, or a custom field).}
-
-\item{total_sum}{Optional numeric vector containing the total read depth per
-sample across the entire VCF, computed by \code{computeTrioTotals()} in
-\code{calculateEvents()}. Used in combination with
-\code{total_valid} to normalize per-block depth ratios.}
-
-\item{total_valid}{Optional numeric vector containing the total number of
-valid (non-missing) depth observations per sample across the entire VCF,
-also computed by \code{computeTrioTotals()}. Used in combination with
-\code{total_sum} to normalize per-block depth ratios.}
-
-\item{sum_cols}{Character vector with names of columns in the block data.frame
-that store the sum of depth metrics inside each block.}
-
-\item{count_cols}{Character vector with names of columns in the block
-data.frame storing the count of valid depth positions inside each block.}
-
-\item{ratio_cols}{Character vector containing the names of the output columns
-in which to store block-level inside/outside depth ratios.}
+\item{total_mean}{Optional numeric vector of per-sample mean read depths across the entire VCF, used to normalize per-block depth ratios computed via \code{computeTrioTotals()} in \code{calculateEvents()}.}
 
 \item{mendelian_error_values}{Character vector of genotype codes considered
 Mendelian errors (i.e., observations with minimal emission probability in
@@ -56,23 +37,22 @@ the "normal" state).
 Provided by \code{calculateEvents()}.}
 }
 \value{
-A data.frame summarizing blocks detected on the chromosome. Columns include:
+A data.frame of detected blocks for the chromosome, or NULL if error
+Columns include:
 \itemize{
-\item \code{seqnames} – chromosome name
+\item \code{chromosome} – chromosome name
 \item \code{start}, \code{end} – genomic coordinates of the block
 \item \code{group} – inferred HMM state
 \item \code{n_snps} – number of SNPs in the block
 \item \code{n_mendelian_error} – number of Mendelian-inconsistent genotypes in the block
-\item depth-ratio metrics (if add_ratios = TRUE)
+\item depth-ratio metrics (always present; if add_ratios = FALSE, filled with NA)
 }
-
-If an error occurs during processing, a message is printed and \code{NULL} is returned.
 }
 \description{
-This internal helper function runs the full UPD-calling pipeline for a single
-chromosome. It applies the Viterbi algorithm to infer hidden states from trio
-genotype observations, converts the resulting Viterbi-annotated VCF into a
-structured per-variant data.frame, summarizes consecutive variants
-with identical inferred states into blocks, counts Mendelian-inconsistent
-sites per block, and optionally computes block-level read-depth ratios.
+Internal helper function to run the full pipeline on one chromosome:
+\itemize{
+\item applyViterbi
+\item blocksVcf
 }
+}
+\keyword{internal}
